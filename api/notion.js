@@ -1,17 +1,17 @@
 // api/notion.js
-
 const { Client } = require("@notionhq/client");
 
-// NOTION_API_KEY 로 클라이언트 생성
 const notion = new Client({
   auth: process.env.NOTION_API_KEY
 });
 
-// 노션에서 질문(query)로 전체 검색 후, 상위 페이지들의 텍스트를 합쳐서 반환
-async function searchNotion(query) {
-  // 노션 키 없으면 그냥 빈 문자열 리턴
+/**
+ * 노션 전체 검색해서 질문과 관련 있는 페이지들의 텍스트를 모아
+ * 하나의 긴 context 문자열로 반환하는 함수
+ */
+async function buildNotionContext(query, maxPages = 3) {
   if (!process.env.NOTION_API_KEY) {
-    console.warn("NOTION_API_KEY is missing");
+    console.warn("NOTION_API_KEY is not set");
     return "";
   }
 
@@ -19,65 +19,86 @@ async function searchNotion(query) {
     return "";
   }
 
-  // 1) 워크스페이스 전체 검색 (통합이 접근 가능한 범위 내)
+  // 1) 노션 전체 검색
   const searchResponse = await notion.search({
     query,
     sort: {
       direction: "descending",
       timestamp: "last_edited_time"
     },
-    page_size: 5 // 상위 5개 결과만 사용
+    page_size: maxPages
   });
 
-  const pages = searchResponse.results.filter(r => r.object === "page");
-
-  if (!pages.length) {
+  const results = searchResponse.results || [];
+  if (results.length === 0) {
     return "";
   }
 
-  let parts = [];
+  let contextChunks = [];
 
-  // 2) 각 페이지에서 제목 + 주요 블록 텍스트 뽑기
-  for (const page of pages) {
-    let title = "Untitled";
+  // 2) 각 검색 결과 페이지에서 텍스트 블록 뽑기
+  for (const result of results) {
+    if (result.object !== "page") continue;
 
-    // 데이터베이스 페이지일 때 title 프로퍼티 추출
-    try {
-      const props = page.properties || {};
-      const nameProp = props.Name || props.이름 || props.제목;
+    const pageId = result.id;
 
-      if (nameProp && Array.isArray(nameProp.title)) {
-        title = nameProp.title.map(t => t.plain_text).join("") || title;
-      }
-    } catch (e) {
-      // 제목 못 가져와도 그냥 넘어감
-    }
-
-    // 블록(본문) 가져오기 – 너무 길어질 수 있으니 앞부분만
+    // 페이지의 child blocks 가져오기 (최대 50개)
     const blocks = await notion.blocks.children.list({
-      block_id: page.id,
+      block_id: pageId,
       page_size: 50
     });
 
-    const bodyText = blocks.results
-      .map(block => {
-        const rich = block[block.type]?.rich_text;
-        if (!rich) return "";
-        return rich.map(r => r.plain_text).join("");
-      })
-      .join("\n")
-      .trim();
+    const texts = [];
 
-    if (!bodyText) continue;
+    for (const block of blocks.results) {
+      // 단락(paragraph)
+      if (block.type === "paragraph") {
+        const richTexts = block.paragraph.rich_text || [];
+        const plain = richTexts.map((t) => t.plain_text).join("");
+        if (plain.trim()) texts.push(plain.trim());
+      }
 
-    parts.push(`# ${title}\n${bodyText}`);
+      // 제목(heading_1~3)
+      if (
+        block.type === "heading_1" ||
+        block.type === "heading_2" ||
+        block.type === "heading_3"
+      ) {
+        const richTexts = block[block.type].rich_text || [];
+        const plain = richTexts.map((t) => t.plain_text).join("");
+        if (plain.trim()) texts.push("# " + plain.trim());
+      }
+
+      // 불릿 리스트(bulleted_list_item)
+      if (block.type === "bulleted_list_item") {
+        const richTexts = block.bulleted_list_item.rich_text || [];
+        const plain = richTexts.map((t) => t.plain_text).join("");
+        if (plain.trim()) texts.push("- " + plain.trim());
+      }
+    }
+
+    if (texts.length > 0) {
+      const joined = texts.join("\n");
+      contextChunks.push(joined);
+    }
   }
 
-  // 여러 페이지 내용을 하나의 큰 텍스트로 합치고, 너무 길면 자르기
-  const context = parts.join("\n\n---\n\n");
-  return context.slice(0, 6000); // 프롬프트 과도하게 길어지는 것 방지
+  if (contextChunks.length === 0) {
+    return "";
+  }
+
+  // 3) 여러 페이지 내용을 하나의 문자열로 합치기
+  let context = contextChunks.join("\n\n---\n\n");
+
+  // 너무 길어지면 앞부분만 사용 (토큰 제한 방지)
+  const MAX_CHARS = 6000;
+  if (context.length > MAX_CHARS) {
+    context = context.slice(0, MAX_CHARS) + "\n\n...[이후 내용 생략]";
+  }
+
+  return context;
 }
 
 module.exports = {
-  searchNotion
+  buildNotionContext
 };
