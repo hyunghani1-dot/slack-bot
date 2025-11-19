@@ -2,6 +2,7 @@
 
 const OpenAI = require("openai");
 const { WebClient } = require("@slack/web-api");
+const { searchNotion } = require("./notion");
 
 // OpenAI 클라이언트
 const openai = new OpenAI({
@@ -42,20 +43,38 @@ module.exports = async (req, res) => {
     }
 
     // 5) OpenAI gpt-4.1 호출
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "너는 형주한의원 전용상담 gpt야. 직원 물음에는 상세하게 설명해주고, 환자응대는 부드럽고 전문적이되, 의학적인 부분은 단호하게 해줘."
-        },
-        {
-          role: "user",
-          content: text
-        }
-      ]
-    });
+   // 4-1) 노션에서 관련 내용 검색
+const notionContext = await searchNotion(text);
+
+// 5) OpenAI gpt-4.1-mini 호출 (노션 콘텍스트 포함)
+let messages = [
+  {
+    role: "system",
+    content:
+      "너는 형주한의원 전용상담 gpt야. 직원 물음에는 상세하게 설명해주고, 환자응대는 부드럽고 전문적이되, 의학적인 부분은 단호하게 해줘."
+  }
+];
+
+// 노션에서 뭔가라도 찾았으면, 그 내용을 추가로 제공
+if (notionContext) {
+  messages.push({
+    role: "system",
+    content:
+      "아래는 형주한의원 노션 문서에서 이 질문과 관련해 검색된 내용이야. 가능한 한 이 정보를 우선 참고해서 답변해.\n\n" +
+      notionContext
+  });
+}
+
+// 마지막에 유저 질문 추가
+messages.push({
+  role: "user",
+  content: text
+});
+
+const completion = await openai.chat.completions.create({
+  model: "gpt-4.1-mini",
+  messages
+});
 
     const answer = completion.choices[0].message.content;
 
