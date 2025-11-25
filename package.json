@@ -5,9 +5,7 @@
   "main": "api/slack.js",
   "dependencies": {
     "@slack/web-api": "^6.x",
-    "@google/genai": "^0.2.5",  // 
-    "openai": "^4.x",
-    // ... 다른 의존성들
+    "@google/genai": "^0.2.5" 
   },
   "scripts": {
     "start": "node api/slack.js"
