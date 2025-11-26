@@ -2,7 +2,7 @@
   "name": "slack-notion-gemini",
   "version": "1.0.0",
   "dependencies": {
-    "@google/generative-ai": "latest", 
+    "@google/generative-ai": "^0.21.0",
     "@notionhq/client": "^2.2.0"
   }
 }
